@@ -24,6 +24,11 @@
   #whisperBtn { background: #1a2c44; color: #7fd0ff; border: 1px solid #2b4a73; }
   #whisperBtn.on { background: #146ef5; color: #fff; }
   #hint { font-size: 12px; color: #5f7a99; margin: 8px 0 4px; text-align: center; padding: 0 16px; }
+  #typeRow { width: min(880px, 96vw); display: flex; gap: 8px; margin-top: 8px; }
+  #typeQ { flex: 1; background: #0d1626; border: 1px solid #23405f; border-radius: 24px;
+           padding: 12px 18px; color: #e8eef6; font-size: 14px; outline: none; }
+  #typeQ:focus { border-color: #7fd0ff; }
+  #askBtn { background: #146ef5; color: #fff; }
   #feed { width: min(880px, 96vw); display: flex; flex-direction: column; gap: 12px;
           padding: 12px 6px 40px; }
   .card { background: linear-gradient(160deg, #14273f, #0e1c30); border: 1px solid #23405f;
@@ -59,6 +64,10 @@
   <button id="whisperBtn" title="Speak answers aloud">🔈 Whisper: off</button>
 </div>
 <div id="hint">Grant mic access, then let the interviewer talk. Copilot detects questions and feeds you CV-grounded answers in real time.</div>
+<div id="typeRow">
+  <input id="typeQ" placeholder="Or type an interview question to try it…" aria-label="Type an interview question">
+  <button id="askBtn">Ask</button>
+</div>
 <div id="transcript"></div>
 <div id="feed"></div>
 
@@ -130,8 +139,19 @@ async function onSpeech(text) {
   } catch(e){}
 }
 
-startBtn.onclick = () => {
-  if (!SR) return;
+const typeQ = document.getElementById('typeQ'), askBtn = document.getElementById('askBtn');
+function askTyped() {
+  const q = typeQ.value.trim();
+  if (!q || busy) return;
+  typeQ.value = '';
+  lastQ = q;
+  addCard('q', 'Asked', '\u201c' + esc(q) + '\u201d', '');
+  answerQuestion(q, false);
+}
+askBtn.onclick = askTyped;
+typeQ.addEventListener('keydown', e => { if (e.key === 'Enter') askTyped(); });
+
+startBtn.onclick = () => {  if (!SR) return;
   rec = new SR(); rec.lang = 'en-US'; rec.interimResults = true; rec.continuous = true;
   let buf = '';
   rec.onresult = e => {
