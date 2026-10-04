@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Interview Copilot</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background: #0a0f1a;
+         color: #e8eef6; min-height: 100vh; display: flex; flex-direction: column; align-items: center; }
+  header { width: 100%; max-width: 900px; padding: 22px 20px 8px; display: flex;
+           align-items: center; justify-content: space-between; }
+  header h1 { font-size: 22px; font-weight: 800; }
+  header h1 span { color: #7fd0ff; }
+  #status { font-size: 13px; color: #8fa3bd; display: flex; align-items: center; gap: 8px; }
+  #dot { width: 10px; height: 10px; border-radius: 50%; background: #3a4a61; }
+  #dot.live { background: #ff5a5a; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: .4; } }
+  #controls { display: flex; gap: 10px; margin: 10px 0 4px; }
+  button { border: none; border-radius: 24px; padding: 12px 26px; font-size: 15px;
+           font-weight: 700; cursor: pointer; }
+  #startBtn { background: linear-gradient(135deg, #22c55e, #16a34a); color: #fff; }
+  #stopBtn { background: #2a3b52; color: #cbd5e1; }
+  #whisperBtn { background: #1a2c44; color: #7fd0ff; border: 1px solid #2b4a73; }
+  #whisperBtn.on { background: #146ef5; color: #fff; }
+  #hint { font-size: 12px; color: #5f7a99; margin: 8px 0 4px; text-align: center; padding: 0 16px; }
+  #feed { width: min(880px, 96vw); display: flex; flex-direction: column; gap: 12px;
+          padding: 12px 6px 40px; }
+  .card { background: linear-gradient(160deg, #14273f, #0e1c30); border: 1px solid #23405f;
+          border-radius: 16px; padding: 16px 18px; animation: rise .35s ease-out; }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
+  .card.q { border-left: 4px solid #7fd0ff; }
+  .card.a { border-left: 4px solid #22c55e; }
+  .card.deep { border-left: 4px solid #f59e0b; }
+  .card .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px;
+               color: #5f7a99; margin-bottom: 6px; }
+  .card .txt { font-size: 16px; line-height: 1.55; }
+  .card .meta { margin-top: 8px; font-size: 11px; color: #5f7a99; display: flex;
+                justify-content: space-between; align-items: center; }
+  .card .deepbtn { background: #3a2c10; color: #fbbf24; border: 1px solid #6b4d16;
+                   border-radius: 16px; padding: 6px 14px; font-size: 12px; cursor: pointer; }
+  .thinking { color: #7fd0ff; font-style: italic; }
+  #transcript { width: min(880px, 96vw); max-height: 130px; overflow-y: auto; font-size: 13px;
+               color: #8fa3bd; padding: 10px 14px; background: #0d1626; border-radius: 12px;
+               margin-top: 6px; }
+  .badge { font-size: 11px; color: #7fd0ff; border: 1px solid #2b4a73; border-radius: 20px;
+           padding: 4px 12px; background: rgba(20,110,245,.12); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎧 Interview <span>Copilot</span></h1>
+  <div id="status"><div id="dot"></div><span id="statusTxt">Idle</span></div>
+</header>
+<div><span class="badge">NVIDIA NEMOTRON via NEBIUS TOKEN FACTORY</span></div>
+<div id="controls">
+  <button id="startBtn">Start Session</button>
+  <button id="stopBtn" style="display:none">Stop</button>
+  <button id="whisperBtn" title="Speak answers aloud">🔈 Whisper: off</button>
+</div>
+<div id="hint">Grant mic access, then let the interviewer talk. Copilot detects questions and feeds you CV-grounded answers in real time.</div>
+<div id="transcript"></div>
+<div id="feed"></div>
+
+<script>
+const feed = document.getElementById('feed'), transcriptEl = document.getElementById('transcript'),
+      dot = document.getElementById('dot'), statusTxt = document.getElementById('statusTxt'),
+      startBtn = document.getElementById('startBtn'), stopBtn = document.getElementById('stopBtn'),
+      whisperBtn = document.getElementById('whisperBtn');
+let rec = null, listening = false, whisper = false, lastQ = '', busy = false;
+
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (!SR) document.getElementById('hint').textContent = 'Speech recognition not supported in this browser — use Chrome/Edge.';
+
+function esc(s){ return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function addCard(cls, lbl, txt, metaHtml) {
+  const d = document.createElement('div'); d.className = 'card ' + cls;
+  d.innerHTML = `<div class="lbl">${lbl}</div><div class="txt">${txt}</div>` +
+    (metaHtml ? `<div class="meta">${metaHtml}</div>` : '');
+  feed.prepend(d); return d;
+}
+function speak(t) {
+  if (!whisper) return;
+  try { speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(t); u.rate = 1.05; u.volume = .9;
+    speechSynthesis.speak(u); } catch(e){}
+}
+whisperBtn.onclick = () => { whisper = !whisper;
+  whisperBtn.textContent = whisper ? '🔈 Whisper: on' : '🔈 Whisper: off';
+  whisperBtn.classList.toggle('on', whisper); };
+
+async function answerQuestion(q, deep) {
+  if (busy && !deep) return; busy = true;
+  const card = addCard(deep ? 'deep' : 'a', deep ? 'Deep dive' : 'Suggested answer',
+    '<span class="thinking">Thinking…</span>', '');
+  try {
+    const r = await fetch('/api/answer', { method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ question: q, deep }) });
+    const j = await r.json();
+    if (j.error) { card.querySelector('.txt').textContent = 'Error: ' + j.error; }
+    else {
+      card.querySelector('.txt').textContent = j.answer;
+      card.querySelector('.meta')?.remove();
+      const meta = document.createElement('div'); meta.className = 'meta';
+      meta.innerHTML = `<span>${esc(j.model || '')}</span>` +
+        (deep ? '' : `<button class="deepbtn">Deep dive →</button>`);
+      card.appendChild(meta);
+      const btn = meta.querySelector('.deepbtn');
+      if (btn) btn.onclick = () => answerQuestion(q, true);
+      speak(j.answer);
+    }
+  } catch(e) { card.querySelector('.txt').textContent = 'Could not reach the copilot service.'; }
+  busy = false;
+}
+
+async function onSpeech(text) {
+  transcriptEl.textContent = text.slice(-500);
+  if (busy) return;
+  try {
+    const r = await fetch('/api/detect', { method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ transcript: text.slice(-400) }) });
+    const j = await r.json();
+    if (j.question && j.question !== lastQ) {
+      lastQ = j.question;
+      addCard('q', 'Heard', '“' + esc(j.question) + '”', '');
+      answerQuestion(j.question, false);
+    }
+  } catch(e){}
+}
+
+startBtn.onclick = () => {
+  if (!SR) return;
+  rec = new SR(); rec.lang = 'en-US'; rec.interimResults = true; rec.continuous = true;
+  let buf = '';
+  rec.onresult = e => {
+    let txt = ''; for (const r of e.results) txt += r[0].transcript;
+    buf = txt; onSpeech(buf);
+  };
+  rec.onend = () => { if (listening) { try { rec.start(); } catch(e){} } };
+  rec.onerror = e => { if (e.error === 'not-allowed') stop(); };
+  listening = true; rec.start();
+  dot.classList.add('live'); statusTxt.textContent = 'Listening…';
+  startBtn.style.display = 'none'; stopBtn.style.display = '';
+  addCard('', 'Session', 'Copilot is listening. Speak or play the interviewer\'s audio near the mic.', '');
+};
+function stop() {
+  listening = false; try { rec && rec.stop(); } catch(e){}
+  dot.classList.remove('live'); statusTxt.textContent = 'Idle';
+  startBtn.style.display = ''; stopBtn.style.display = 'none';
+}
+stopBtn.onclick = stop;
+</script>
+</body>
+</html>
